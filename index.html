@@ -1,12 +1,1208 @@
 <!doctype html>
-<html lang="zh">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>绩效表结算（纯前端）</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>绩效表（纯前端离线）</title>
+  <style>
+    :root { font-family: -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+    body { margin: 16px; }
+    h1 { margin: 6px 0 10px; font-size: 20px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+    .card { border:1px solid #e5e5e5; border-radius:10px; padding:12px; background:#fff; }
+    .card h2 { margin: 0 0 8px; font-size: 14px; }
+    .small { font-size: 12px; color: #666; }
+    label { display:block; font-size:12px; color:#333; margin: 8px 0 4px; }
+    input[type="text"], textarea { width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #ddd; border-radius:8px; font-size: 13px; }
+    textarea { min-height: 80px; resize: vertical; }
+    button { padding: 10px 12px; border:1px solid #ddd; background:#fafafa; border-radius:10px; cursor:pointer; }
+    button.primary { background:#111; color:#fff; border-color:#111; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; margin-right:6px; color:#333; }
+    .warn { color:#b45309; }
+    .ok { color:#047857; }
+    .err { color:#b91c1c; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border: 1px solid #e6e6e6; padding: 6px; vertical-align: top; }
+    th { background: #f8f8f8; position: sticky; top: 0; z-index: 1; }
+    .tables { display:grid; grid-template-columns: 1fr; gap: 14px; }
+    details > summary { cursor:pointer; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 980px){ .grid2 { grid-template-columns: 1fr; } }
+  </style>
+
+  <!-- Libraries (CDN) -->
+  <!-- SheetJS (xlsx) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+  <!-- JSZip for docx -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head>
+
+<body>
+  <h1>绩效表（纯前端离线 · 无后端）</h1>
+  <div class="small">
+    <span class="pill">docx/xlsx 本地解析</span>
+    <span class="pill">去重计次</span>
+    <span class="pill">讲解档位</span>
+    <span class="pill">800封顶分配</span>
+    <span class="pill">A~F 输出</span>
+    <span class="pill">导出Excel</span>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <div class="card" style="flex: 1 1 420px;">
+      <h2>1) 上传文件</h2>
+
+      <label>量化表模板（xlsx，必须）</label>
+      <input id="quantFile" type="file" accept=".xlsx" />
+
+      <label>绩效表（可多选：docx/xlsx）</label>
+      <input id="perfFiles" type="file" multiple accept=".docx,.xlsx" />
+
+      <label>优先代收人名单（可选，按优先级一行一个姓名）</label>
+      <textarea id="priorityList" placeholder="例如：&#10;A&#10;B&#10;C"></textarea>
+
+      <label>同义词字典（可选，JSON；用于更准的近义匹配）</label>
+      <textarea id="synonyms" class="mono" placeholder='例如：{"讲解":["导览","带队讲解"],"杂活":["布置","搬运"]}'></textarea>
+
+      <div class="small warn" style="margin-top:8px;">
+        说明：本工具纯离线。图片OCR未做（强烈建议上传 docx/xlsx）。
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+        <button id="runBtn" class="primary" disabled>运行解析与结算</button>
+        <button id="exportBtn" disabled>导出结果Excel（A~F）</button>
+      </div>
+
+      <div id="status" class="small" style="margin-top:10px;"></div>
+
+      <details style="margin-top:10px;">
+        <summary class="small">排版“读歪”处理（你们表格专用）</summary>
+        <div class="small" style="margin-top:6px;">
+          - 默认你们 docx 是表格结构：第1列=字段名（姓名/考核月份/讲解工作/阶段工作/杂活…）<br/>
+          - 第2~5列经常重复同一段内容：工具会对第2~5列去重，只取唯一值（优先第2列）<br/>
+          - “(X)次”括号总次数优先；编号列表仅作佐证，不叠加<br/>
+        </div>
+      </details>
+    </div>
+
+    <div class="card" style="flex: 1 1 520px;">
+      <h2>2) 输出预览</h2>
+      <div class="small" style="margin-bottom:10px;">
+        运行后会在下方生成 A~F 表。若遇到模糊/不一致/近义推断，会写入 D 异常表。
+      </div>
+      <div id="summaryLine" class="small"></div>
+    </div>
+  </div>
+
+  <div class="tables" style="margin-top:14px;">
+    <div class="card"><h2>A）明细表（按人月聚合）</h2><div id="tableA"></div></div>
+    <div class="card"><h2>B）量化表（简化矩阵：人月×标准项次数）</h2><div id="tableB"></div></div>
+    <div class="card"><h2>C）个人汇总表（每人一行）</h2><div id="tableC"></div></div>
+    <div class="card"><h2>D）异常/待确认表（含匹配方式/操作说明）</h2><div id="tableD"></div></div>
+    <div class="card"><h2>E）金额分配表（800封顶后）</h2><div id="tableE"></div></div>
+    <div class="card"><h2>F）转账通知表（转出→转入合并）</h2><div id="tableF"></div></div>
+  </div>
+
+<script>
+/* =========================
+   Utilities
+========================= */
+const $ = (id) => document.getElementById(id);
+
+function setStatus(msg, cls="") {
+  const el = $("status");
+  el.className = "small " + (cls || "");
+  el.textContent = msg;
+}
+
+function normalizeWhitespace(s) {
+  return (s || "").replace(/\u00A0/g, " ").replace(/[ \t]+/g, " ").replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").trim();
+}
+
+function stripTemplates(s) {
+  // 你们表里常出现的模板词：仅备注不算内容
+  return normalizeWhitespace(s)
+    .replace(/所属部门\/组[:：]?\s*/g, "")
+    .replace(/\b主席团\b/g, "主席团")
+    ;
+}
+
+function cleanCellText(s) {
+  return normalizeWhitespace(stripTemplates(s || ""));
+}
+
+function isEmptyOrNone(s) {
+  const t = cleanCellText(s);
+  if (!t) return true;
+  return /^(无|空白|未填写|没有|未做|暂无|N\/A)$/i.test(t);
+}
+
+// 中文数字 -> 阿拉伯数字（简单够用）
+const CN_NUM = { 零:0, 一:1, 二:2, 两:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10 };
+function cnToInt(cn) {
+  cn = (cn || "").trim();
+  if (!cn) return NaN;
+  if (/^\d+$/.test(cn)) return parseInt(cn, 10);
+  // 支持 十, 十一, 二十, 二十三
+  if (cn === "十") return 10;
+  const idxTen = cn.indexOf("十");
+  if (idxTen >= 0) {
+    const left = cn.slice(0, idxTen);
+    const right = cn.slice(idxTen + 1);
+    const l = left ? (CN_NUM[left] ?? NaN) : 1;
+    const r = right ? (CN_NUM[right] ?? NaN) : 0;
+    if (Number.isNaN(l) || Number.isNaN(r)) return NaN;
+    return l * 10 + r;
+  }
+  // 单字
+  if (cn.length === 1 && CN_NUM[cn] != null) return CN_NUM[cn];
+  return NaN;
+}
+
+function extractCount(text) {
+  // 规则：无/未做 -> 0；有明确次数 -> 该次数；否则默认 1
+  const t = cleanCellText(text);
+  if (isEmptyOrNone(t)) return { count: 0, source: "none" };
+
+  // 优先括号 (X) 次
+  let m = t.match(/[（(]\s*([0-9]+|[一二两三四五六七八九十]+)\s*[）)]\s*次/);
+  if (m) {
+    const v = cnToInt(m[1]);
+    if (!Number.isNaN(v)) return { count: v, source: "paren" };
+  }
+
+  // 常见：共3场 / 3次 / 三次 / 2篇/1条/1张/1个/1人/1月
+  m = t.match(/(?:共)?\s*([0-9]+|[一二两三四五六七八九十]+)\s*(次|场|篇|条|张|个|人|月)\b/);
+  if (m) {
+    const v = cnToInt(m[1]);
+    if (!Number.isNaN(v)) return { count: v, source: "explicit" };
+  }
+  return { count: 1, source: "default" };
+}
+
+function splitItems(text) {
+  // 按顿号、逗号、分号、换行、编号（1. 2. / 1、2、）切分
+  const t = cleanCellText(text);
+  if (!t) return [];
+  const lines = t.split(/\n+/).map(x => x.trim()).filter(Boolean);
+  const chunks = [];
+  for (const ln of lines) {
+    // 把 "1. xxx 2. yyy" 拆开
+    const byNum = ln.split(/(?:(?:^|\s)(?:\d+)[\.\、]\s*)/).map(x=>x.trim()).filter(Boolean);
+    for (const seg of byNum) {
+      const parts = seg.split(/[、，,；;]+/).map(x=>x.trim()).filter(Boolean);
+      chunks.push(...parts);
+    }
+  }
+  return chunks;
+}
+
+function normalizeName(nameRaw) {
+  let s = cleanCellText(nameRaw);
+  if (!s) return { name: "", note: "" };
+  // 提取括号备注
+  let note = "";
+  const m = s.match(/^(.*?)\s*[（(](.*?)[）)]\s*$/);
+  if (m) {
+    s = m[1].trim();
+    note = m[2].trim();
+  }
+  s = s.replace(/\s+/g, "");
+  s = s.replace(/(同学|老师|同事)$/g, "");
+  return { name: s, note };
+}
+
+// Dice coefficient for string similarity (simple)
+function bigrams(str) {
+  const s = str.replace(/\s+/g,"");
+  const res = [];
+  for (let i=0;i<s.length-1;i++) res.push(s.slice(i,i+2));
+  return res;
+}
+function dice(a,b){
+  a = a || ""; b = b || "";
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const A = bigrams(a), B = bigrams(b);
+  const map = new Map();
+  for (const x of A) map.set(x, (map.get(x)||0)+1);
+  let inter = 0;
+  for (const y of B) {
+    const c = map.get(y)||0;
+    if (c>0) { inter++; map.set(y,c-1); }
+  }
+  return (2*inter)/(A.length+B.length || 1);
+}
+
+function parseSynonymsJson() {
+  const raw = $("synonyms").value.trim();
+  if (!raw) return {};
+  try {
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+/* =========================
+   Quant template parsing
+   - expects xlsx with a sheet containing standard items and price
+   - Heuristic: find columns named like "标准事项/事项/项目" and "单价/价格"
+========================= */
+function findHeaderRow(sheet, range) {
+  const { s, e } = range;
+  // scan first 30 rows for headers
+  for (let r=s.r; r<=Math.min(e.r, s.r+40); r++){
+    const row = [];
+    for (let c=s.c; c<=e.c; c++){
+      const addr = XLSX.utils.encode_cell({r,c});
+      const v = sheet[addr]?.v;
+      row.push((v==null?"":String(v)).trim());
+    }
+    const joined = row.join("|");
+    if (/(标准|事项|项目)/.test(joined) && /(单价|价格|金额)/.test(joined)) return r;
+  }
+  return s.r;
+}
+
+function parseQuantXlsx(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array" });
+  const items = []; // {standard, price}
+  for (const name of wb.SheetNames) {
+    const sh = wb.Sheets[name];
+    const range = XLSX.utils.decode_range(sh["!ref"]);
+    const hr = findHeaderRow(sh, range);
+    // map header -> col
+    const headers = {};
+    for (let c=range.s.c; c<=range.e.c; c++){
+      const v = sh[XLSX.utils.encode_cell({r:hr,c})]?.v;
+      const key = (v==null?"":String(v)).trim();
+      if (!key) continue;
+      headers[key] = c;
+    }
+    const cols = { item: null, price: null };
+    for (const [k,c] of Object.entries(headers)) {
+      if (cols.item==null && /(标准|事项|项目)/.test(k)) cols.item = c;
+      if (cols.price==null && /(单价|价格)/.test(k)) cols.price = c;
+      if (cols.price==null && /金额/.test(k)) cols.price = c;
+    }
+    if (cols.item==null || cols.price==null) continue;
+
+    for (let r=hr+1; r<=range.e.r; r++){
+      const itemCell = sh[XLSX.utils.encode_cell({r,c:cols.item})]?.v;
+      const priceCell = sh[XLSX.utils.encode_cell({r,c:cols.price})]?.v;
+      const standard = cleanCellText(itemCell==null?"":String(itemCell));
+      if (!standard) continue;
+      const price = Number(priceCell);
+      if (!Number.isFinite(price)) continue;
+      items.push({ standard, price });
+    }
+    if (items.length) break; // first good sheet
+  }
+  if (!items.length) {
+    throw new Error("量化表未识别到“标准事项+单价”列（请检查模板是否包含这些列名）。");
+  }
+  return items;
+}
+
+/* =========================
+   DOCX table parsing (pure front-end)
+   - extract document.xml tables
+   - output rows: cells text
+========================= */
+function xmlText(node) {
+  return node?.textContent ? node.textContent : "";
+}
+function getTextFromTc(tc) {
+  // gather all w:t
+  const texts = tc.getElementsByTagName("w:t");
+  let out = "";
+  for (const t of texts) out += xmlText(t);
+  // keep line breaks for w:br
+  return cleanCellText(out);
+}
+
+async function parseDocxToLabeledBlocks(arrayBuffer) {
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const docXml = await zip.file("word/document.xml").async("text");
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(docXml, "application/xml");
+  const tbls = Array.from(xml.getElementsByTagName("w:tbl"));
+  const blocks = []; // [{label, value, rawCols:[]}]
+  for (const tbl of tbls) {
+    const rows = Array.from(tbl.getElementsByTagName("w:tr"));
+    for (const tr of rows) {
+      const tcs = Array.from(tr.getElementsByTagName("w:tc"));
+      if (tcs.length < 2) continue;
+      const cols = tcs.map(getTextFromTc).map(cleanCellText);
+      const label = cols[0];
+      if (!label) continue;
+
+      // content candidates from col 2~5
+      const candidates = cols.slice(1, 5).map(cleanCellText).filter(x => x);
+      // remove exact duplicates and template-only short words
+      const uniq = [];
+      for (const c of candidates) {
+        const cc = c.trim();
+        if (!cc) continue;
+        if (cc.length <= 4 && /^(主席团|部门|组)$/i.test(cc)) continue;
+        if (!uniq.includes(cc)) uniq.push(cc);
+      }
+
+      // choose value: prefer col2 if meaningful, else longest
+      let value = "";
+      if (cols[1] && !/^(主席团|部门|组)$/i.test(cols[1]) && cols[1].trim().length>0) value = cols[1];
+      if (!value && uniq.length) {
+        value = uniq.slice().sort((a,b)=>b.length-a.length)[0];
+      }
+      value = cleanCellText(value);
+
+      blocks.push({ label: cleanCellText(label), value, rawCols: cols });
+    }
+  }
+  return blocks;
+}
+
+/* =========================
+   XLSX perf parsing (basic)
+   - try to find columns: 姓名, 考核月份/月, 内容/工作/事项
+========================= */
+function parsePerfXlsx(arrayBuffer, fileName) {
+  const wb = XLSX.read(arrayBuffer, { type:"array" });
+  const items = [];
+  for (const sn of wb.SheetNames) {
+    const sh = wb.Sheets[sn];
+    const range = XLSX.utils.decode_range(sh["!ref"]);
+    // header row: scan first 30
+    let hr = range.s.r;
+    let best = { r: hr, score: -1, map: {} };
+    for (let r=range.s.r; r<=Math.min(range.e.r, range.s.r+40); r++) {
+      const map = {};
+      let score = 0;
+      for (let c=range.s.c; c<=range.e.c; c++){
+        const v = sh[XLSX.utils.encode_cell({r,c})]?.v;
+        const t = (v==null?"":String(v)).trim();
+        if (!t) continue;
+        if (/姓名/.test(t)) { map.name=c; score+=3; }
+        if (/(考核月份|月份|月)/.test(t)) { map.month=c; score+=2; }
+        if (/(内容|工作|事项|具体)/.test(t)) { map.text=c; score+=3; }
+      }
+      if (score > best.score) best = { r, score, map };
+    }
+    if (best.score < 3 || !best.map.text) continue;
+
+    const { name, month, text } = best.map;
+    for (let r=best.r+1; r<=range.e.r; r++){
+      const nameV = name!=null ? sh[XLSX.utils.encode_cell({r,c:name})]?.v : "";
+      const monthV = month!=null ? sh[XLSX.utils.encode_cell({r,c:month})]?.v : "";
+      const textV = sh[XLSX.utils.encode_cell({r,c:text})]?.v;
+      const txt = cleanCellText(textV==null?"":String(textV));
+      if (!txt) continue;
+      const nm = cleanCellText(nameV==null?"":String(nameV));
+      items.push({
+        fileName,
+        month: cleanCellText(monthV==null?"":String(monthV)),
+        nameRaw: nm,
+        text: txt,
+        rowHint: `${sn}!R${r+1}`
+      });
+    }
+  }
+  return items;
+}
+
+/* =========================
+   Matching to standard items
+========================= */
+function buildMatcher(quantItems, synonyms) {
+  const standards = quantItems.map(x => x.standard);
+  const priceMap = new Map(quantItems.map(x => [x.standard, x.price]));
+
+  // reverse synonym lookup
+  const aliasToStandard = new Map();
+  for (const [std, arr] of Object.entries(synonyms || {})) {
+    if (!Array.isArray(arr)) continue;
+    for (const a of arr) {
+      const key = cleanCellText(String(a));
+      if (key) aliasToStandard.set(key, std);
+    }
+  }
+
+  function pickStandard(fragment) {
+    const f = cleanCellText(fragment);
+    if (!f) return { standard: "", mode:"unmatched", explain:"空片段", candidates:[] };
+
+    // exact standard
+    if (priceMap.has(f)) return { standard: f, mode:"exact", explain:"与标准项同名", candidates:[] };
+
+    // alias exact
+    if (aliasToStandard.has(f)) {
+      return { standard: aliasToStandard.get(f), mode:"synonym", explain:`同义词命中：${f}`, candidates:[] };
+    }
+
+    // special: 讲解档位（不依赖量化表同义词）
+    // 这里只判断“讲解类”词根，让后续档位判断来决定具体标准项名称
+    if (/讲解|导览|带队|接待/.test(f)) {
+      // 暂时返回 "讲解" 作为占位（后面会替换成具体标准项名：讲解/紧急/重要复杂/跨校区）
+      return { standard: "__LECTURE__", mode:"rule", explain:"讲解类关键词", candidates:["讲解","紧急讲解","重要/复杂讲解","讲解（跨校区）"] };
+    }
+
+    // fuzzy by dice
+    let best = { s:"", sc:0 };
+    const top = [];
+    for (const s of standards) {
+      const sc = dice(f, s);
+      if (sc > best.sc) best = { s, sc };
+      top.push({ s, sc });
+    }
+    top.sort((a,b)=>b.sc-a.sc);
+    const cand = top.slice(0,3);
+
+    if (best.sc >= 0.75) {
+      return { standard: best.s, mode:"fuzzy", explain:`相似度匹配 ${best.sc.toFixed(2)}`, candidates: cand };
+    }
+    if (best.sc >= 0.60) {
+      return { standard: best.s, mode:"guess", explain:`可能匹配（低置信）${best.sc.toFixed(2)}`, candidates: cand };
+    }
+    return { standard:"", mode:"unmatched", explain:`无法匹配（最高相似度 ${best.sc.toFixed(2)}）`, candidates: cand };
+  }
+
+  return { pickStandard, priceMap };
+}
+
+/* =========================
+   Core logic for your DOCX template
+========================= */
+function inferMonthFromFileName(fn) {
+  const m = (fn||"").match(/(\d{1,2})月/);
+  if (m) return m[1];
+  return "";
+}
+
+function detectLectureTier(text) {
+  const t = cleanCellText(text);
+  const hasCross = /(跨校区|外校区|分校区|去.+校区)/.test(t);
+  const hasUrgent = /(紧急|加急|临时)/.test(t);
+  const hasImportant = /(重要|复杂|重点|大型|接待领导|接待专家|领导参观|专家参观)/.test(t);
+  return { hasCross, hasUrgent, hasImportant };
+}
+
+function lectureStandardName(tier, matcher, quantItems) {
+  // choose first existing in quant template; fallback to common names
+  const stds = new Set(quantItems.map(x=>x.standard));
+  if (tier.hasCross) return stds.has("讲解（跨校区）") ? "讲解（跨校区）" : "讲解（跨校区）";
+  if (tier.hasUrgent) return stds.has("紧急讲解") ? "紧急讲解" : "紧急讲解";
+  if (tier.hasImportant) return stds.has("重要/复杂讲解") ? "重要/复杂讲解" : "重要/复杂讲解";
+  return stds.has("讲解") ? "讲解" : "讲解";
+}
+
+/* =========================
+   800 allocation
+========================= */
+function allocate800(records, priorityNames) {
+  // records: [{name, rawAmount}]
+  const res = records.map(r => ({
+    name: r.name,
+    raw: r.rawAmount,
+    selfPay: Math.min(r.rawAmount, 800),
+    overflow: Math.max(r.rawAmount - 800, 0),
+    final: Math.min(r.rawAmount, 800),
+    recvFrom: [] // {from, amount} means this account receives overflow from "from"
+  }));
+
+  const byName = new Map(res.map(x=>[x.name,x]));
+  // receivers: who can receive money (capacity)
+  function capacities() {
+    return res
+      .map(x => ({ name:x.name, cap: 800 - x.final }))
+      .filter(x => x.cap > 0);
+  }
+
+  // list overflow donors
+  const donors = res.filter(x => x.overflow > 0);
+
+  // receiver ordering: priority list then remaining by cap desc
+  const usedReceivers = new Set();
+  const transferPairs = new Map(); // key: receiver->donor amount? but we need reverse in F (receiver transfers to donor)
+  const exceptions = [];
+
+  for (const d of donors) {
+    let need = d.overflow;
+    // build receiver list each time
+    const caps = capacities();
+    // priority first
+    const pr = [];
+    for (const n of priorityNames) {
+      const c = caps.find(x => x.name === n);
+      if (c) pr.push(c);
+    }
+    const others = caps.filter(x => !priorityNames.includes(x.name)).sort((a,b)=>b.cap-a.cap);
+    const candidates = [...pr, ...others];
+
+    if (!candidates.length) {
+      exceptions.push({ name: d.name, msg: `容量不足：无人可代收，缺口 ${need}` });
+      continue;
+    }
+
+    let splits = 0;
+    for (const r of candidates) {
+      if (need <= 0) break;
+      const recv = byName.get(r.name);
+      const capNow = 800 - recv.final;
+      if (capNow <= 0) continue;
+      const take = Math.min(capNow, need);
+      if (take <= 0) continue;
+
+      // receiver gets take, donor's final becomes 800 (already), but we track donor overflow assigned out
+      recv.final += take;
+      recv.recvFrom.push({ from: d.name, amount: take });
+      usedReceivers.add(recv.name);
+      need -= take;
+      splits++;
+
+      // Transfer notification: receiver must transfer to donor later
+      const key = `${recv.name}=>${d.name}`;
+      transferPairs.set(key, (transferPairs.get(key)||0) + take);
+    }
+
+    if (need > 0) {
+      exceptions.push({ name: d.name, msg: `容量不足：仍缺口 ${need}（该人超出部分无法完全分配）` });
+    } else if (splits > 1) {
+      exceptions.push({ name: d.name, msg: `该人超出部分需多人代收（拆分 ${splits} 笔）` });
+    }
+  }
+
+  // compute remaining cap
+  for (const x of res) {
+    x.remainingCap = Math.max(0, 800 - x.final);
+  }
+
+  // build F transfers
+  const transfers = [];
+  for (const [k, amount] of transferPairs.entries()) {
+    const [out, inn] = k.split("=>");
+    transfers.push({
+      outPerson: out,
+      inPerson: inn,
+      amount,
+      reason: "代收超出部分",
+      note: ""
+    });
+  }
+
+  return { allocation: res, transfers, exceptions, usedReceiverCount: usedReceivers.size };
+}
+
+/* =========================
+   Rendering
+========================= */
+function renderTable(elId, rows) {
+  const el = $(elId);
+  if (!rows || !rows.length) { el.innerHTML = '<div class="small">（无）</div>'; return; }
+  const headers = Object.keys(rows[0]);
+  let html = '<div style="max-height: 380px; overflow:auto;"><table><thead><tr>';
+  for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const r of rows) {
+    html += '<tr>';
+    for (const h of headers) html += `<td>${escapeHtml(r[h] ?? "")}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+/* =========================
+   Main pipeline
+========================= */
+let OUT = null;
+
+async function run() {
+  setStatus("正在读取量化表…");
+  OUT = null;
+
+  const qf = $("quantFile").files?.[0];
+  const pf = $("perfFiles").files;
+  if (!qf || !pf || !pf.length) {
+    setStatus("请先上传：量化表xlsx + 至少1份绩效表。", "err");
+    return;
+  }
+
+  // parse quant
+  const quantBuf = await qf.arrayBuffer();
+  let quantItems = [];
+  try {
+    quantItems = parseQuantXlsx(quantBuf);
+  } catch (e) {
+    setStatus("量化表解析失败：" + e.message, "err");
+    return;
+  }
+
+  // build matcher
+  const synonyms = parseSynonymsJson();
+  const matcher = buildMatcher(quantItems, synonyms);
+
+  // priority list
+  const priorityNames = $("priorityList").value
+    .split(/\n+/).map(x => cleanCellText(x)).filter(Boolean)
+    .map(x => normalizeName(x).name);
+
+  // parse perf files -> normalized person-month blocks
+  setStatus("正在解析绩效表…（docx/xlsx）");
+  const docxBlocks = []; // each file => {fileName, fieldsMap}
+  const perfXlsxItems = []; // raw items list
+  const exceptions = []; // D table entries
+
+  for (const f of pf) {
+    const ab = await f.arrayBuffer();
+    const fileName = f.name;
+    if (fileName.toLowerCase().endsWith(".docx")) {
+      const blocks = await parseDocxToLabeledBlocks(ab);
+      // aggregate by label (some labels may appear multiple times; keep last non-empty)
+      const map = new Map();
+      for (const b of blocks) {
+        const lab = cleanCellText(b.label);
+        const val = cleanCellText(b.value);
+        if (!lab) continue;
+        if (val) map.set(lab, val);
+      }
+      docxBlocks.push({ fileName, fields: map, raw: blocks });
+    } else if (fileName.toLowerCase().endsWith(".xlsx")) {
+      const items = parsePerfXlsx(ab, fileName);
+      perfXlsxItems.push(...items);
+    }
+  }
+
+  // Convert docxBlocks into per-person-month entries
+  const entries = []; // {month, name, sourceFile, sections:{lecture, assist, stage, misc}, rawExtracts:[]}
+  for (const doc of docxBlocks) {
+    const fields = doc.fields;
+    // your template labels (fuzzy match)
+    function getByLabelLike(re) {
+      for (const [k,v] of fields.entries()) {
+        if (re.test(k)) return v;
+      }
+      return "";
+    }
+    const nameRaw = getByLabelLike(/姓名/);
+    const monthRaw = getByLabelLike(/考核月份|月份/);
+    const lectureRaw = getByLabelLike(/讲解工作/);
+    const stageRaw = getByLabelLike(/阶段工作|所属组阶段工作|其它所属组阶段工作/);
+    const miscRaw = getByLabelLike(/杂活/);
+
+    const nm = normalizeName(nameRaw);
+    let month = cleanCellText(monthRaw);
+    if (month) month = month.replace(/[^\d]/g,""); // "12" / "12月"
+    if (!month) {
+      month = inferMonthFromFileName(doc.fileName);
+      if (month) {
+        exceptions.push({
+          月份: month,
+          姓名: nm.name || "(未识别)",
+          原文: `文件：${doc.fileName}`,
+          问题类型: "缺月份",
+          "建议匹配项/需要确认信息": "月份来源=文件名",
+          匹配方式: "人工推断",
+          操作说明: "正文未找到“考核月份”，从文件名推断月份。"
+        });
+      } else {
+        exceptions.push({
+          月份: "",
+          姓名: nm.name || "(未识别)",
+          原文: `文件：${doc.fileName}`,
+          问题类型: "缺月份",
+          "建议匹配项/需要确认信息": "请补充考核月份",
+          匹配方式: "无法匹配",
+          操作说明: "正文与文件名均无法确定月份，暂不计价。"
+        });
+      }
+    }
+
+    if (!nm.name) {
+      exceptions.push({
+        月份: month || "",
+        姓名: "(未识别)",
+        原文: `文件：${doc.fileName}；姓名字段=${nameRaw || "空"}`,
+        问题类型: "缺姓名",
+        "建议匹配项/需要确认信息": "请补充姓名",
+        匹配方式: "无法匹配",
+        操作说明: "无法从“姓名”字段解析出姓名，暂不计价。"
+      });
+      continue;
+    }
+    if (!month) continue;
+
+    entries.push({
+      month,
+      name: nm.name,
+      nameNote: nm.note || "",
+      sourceFile: doc.fileName,
+      lectureRaw,
+      stageRaw,
+      miscRaw
+    });
+  }
+
+  // Convert perfXlsxItems into entries (each row is one item; we will handle similarly but weaker structure)
+  // We'll just create pseudo entries per person-month with concatenated text
+  const byPM = new Map();
+  for (const it of perfXlsxItems) {
+    const nm = normalizeName(it.nameRaw);
+    if (!nm.name) continue;
+    let month = cleanCellText(it.month || "");
+    month = month.replace(/[^\d]/g,"");
+    if (!month) {
+      month = inferMonthFromFileName(it.fileName);
+      if (month) {
+        exceptions.push({
+          月份: month,
+          姓名: nm.name,
+          原文: `文件：${it.fileName} 行：${it.rowHint}`,
+          问题类型: "缺月份",
+          "建议匹配项/需要确认信息": "月份来源=文件名",
+          匹配方式: "人工推断",
+          操作说明: "行内未提供月份，从文件名推断。"
+        });
+      } else {
+        exceptions.push({
+          月份: "",
+          姓名: nm.name,
+          原文: `文件：${it.fileName} 行：${it.rowHint}`,
+          问题类型: "缺月份",
+          "建议匹配项/需要确认信息": "请补充月份",
+          匹配方式: "无法匹配",
+          操作说明: "无法确定月份，暂不计价。"
+        });
+        continue;
+      }
+    }
+    const key = `${month}||${nm.name}`;
+    if (!byPM.has(key)) byPM.set(key, { month, name:nm.name, sourceFile: it.fileName, lectureRaw:"", stageRaw:"", miscRaw:"", extra:[] });
+    byPM.get(key).extra.push(it.text);
+  }
+  for (const v of byPM.values()) {
+    // treat as miscRaw (统一走“杂活/阶段工作”匹配)
+    v.miscRaw = v.extra.join("\n");
+    entries.push(v);
+  }
+
+  // Pricing per entry
+  setStatus("正在计次、匹配标准项、计价…");
+  const detailsA = []; // A rows
+  const matrixB = [];  // B rows (dynamic)
+  const summaryC = []; // C rows
+  const perPersonRaw = new Map(); // name -> {items: Map(standard-> {count, amount}), list:Set, rawTotal, notes:[]}
+
+  // helper to add counts
+  function addCount(person, month, standard, count, mode, explain, originalText, candidates) {
+    if (!standard || count<=0) return;
+    const price = matcher.priceMap.get(standard);
+    if (!Number.isFinite(price)) {
+      exceptions.push({
+        月份: month,
+        姓名: person,
+        原文: originalText || "",
+        问题类型: "未匹配单价",
+        "建议匹配项/需要确认信息": `标准项=${standard} 在量化表中找不到单价列`,
+        匹配方式: "人工推断",
+        操作说明: "标准项存在但单价缺失，暂不计价。"
+      });
+      return;
+    }
+    const key = `${month}||${person}`;
+    if (!perPersonRaw.has(key)) perPersonRaw.set(key, { month, name:person, items:new Map(), list:new Set(), notes:[], excerpts:[] });
+    const rec = perPersonRaw.get(key);
+
+    const cur = rec.items.get(standard) || { count:0, amount:0, modes:[] };
+    cur.count += count;
+    cur.amount += count * price;
+    cur.modes.push(mode);
+    rec.items.set(standard, cur);
+    rec.list.add(standard);
+
+    if (mode !== "exact") {
+      exceptions.push({
+        月份: month,
+        姓名: person,
+        原文: originalText || "",
+        问题类型: mode==="guess" ? "需确认" : "近义匹配/推断",
+        "建议匹配项/需要确认信息": standard + (candidates?.length ? `；候选：${candidates.map(x=>`${x.s}(${x.sc.toFixed(2)})`).join("、")}` : ""),
+        匹配方式: mode==="synonym" ? "近义匹配" : (mode==="fuzzy" ? "近义匹配" : (mode==="guess" ? "人工推断" : mode)),
+        操作说明: `把原文归到【${standard}】；依据：${explain}${mode==="guess" ? "；低置信，建议人工确认" : ""}`
+      });
+    }
+  }
+
+  // For each entry, interpret your template sections:
+  for (const en of entries) {
+    const month = en.month;
+    const person = en.name;
+    const excerpts = [];
+
+    // 讲解块：以括号总次数为准；档位从条目关键词判定
+    const lectureText = cleanCellText(en.lectureRaw || "");
+    if (lectureText && !isEmptyOrNone(lectureText)) {
+      excerpts.push("【讲解工作】" + lectureText);
+      // 讲解场次（X）次
+      const countInfo = extractCount(lectureText);
+      const items = splitItems(lectureText);
+      const tier = detectLectureTier(items.join("\n"));
+      const std = lectureStandardName(tier, matcher, quantItems);
+
+      // 不一致检查：若列表条数明显与总次数不一致
+      const listed = items.filter(x => /[0-9]|年|月|日|：|:/g.test(x) || x.length>2).length;
+      if (countInfo.source === "paren" && listed>0 && listed !== countInfo.count) {
+        exceptions.push({
+          月份: month,
+          姓名: person,
+          原文: lectureText,
+          问题类型: "不一致",
+          "建议匹配项/需要确认信息": `讲解：总次数=${countInfo.count}，列举=${listed}（按总次数计价）`,
+          匹配方式: "精确匹配",
+          操作说明: "有括号总次数，按总次数计价；列表仅作佐证。"
+        });
+      }
+      addCount(person, month, std, countInfo.count, "rule", "讲解档位关键词判定", lectureText, null);
+    }
+
+    // 阶段工作块：括号总次数为准；条目用于拆分标准项（但总次数不叠加）
+    const stageText = cleanCellText(en.stageRaw || "");
+    if (stageText && !isEmptyOrNone(stageText)) {
+      excerpts.push("【阶段工作】" + stageText);
+      const total = extractCount(stageText);
+      const parts = splitItems(stageText);
+      if (total.count > 0) {
+        // 先尝试把条目按标准项分组（近义匹配），但总次数受 total.count 约束
+        // 简化策略：若条目能匹配到某标准项，则按条目数分配；否则把所有次数归到“最相近”的那一项（需确认）
+        const matched = [];
+        const unmatched = [];
+        for (const p of parts) {
+          const pick = matcher.pickStandard(p);
+          if (!pick.standard) { unmatched.push({ p, pick }); continue; }
+          if (pick.standard === "__LECTURE__") { unmatched.push({ p, pick }); continue; }
+          matched.push({ p, pick });
+        }
+
+        if (matched.length === 0) {
+          // fallback: 用整段去匹配
+          const pick = matcher.pickStandard(stageText);
+          if (pick.standard && pick.standard !== "__LECTURE__") {
+            addCount(person, month, pick.standard, total.count, pick.mode, pick.explain, stageText, pick.candidates);
+          } else {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: stageText,
+              问题类型: "未匹配",
+              "建议匹配项/需要确认信息": "阶段工作内容无法匹配到量化表标准事项",
+              匹配方式: "无法匹配",
+              操作说明: "条目与整段均无法可靠匹配，暂不计价。"
+            });
+          }
+        } else {
+          // distribute counts across matched groups
+          // count allocation: proportional by number of matched items, round, ensure sum==total
+          const group = new Map();
+          for (const m of matched) {
+            const s = m.pick.standard;
+            group.set(s, (group.get(s)||0) + 1);
+          }
+          const entriesG = Array.from(group.entries()).map(([s,k])=>({s,k}));
+          let remaining = total.count;
+          for (let i=0;i<entriesG.length;i++){
+            const g = entriesG[i];
+            const take = (i === entriesG.length-1) ? remaining : Math.floor(total.count * (g.k / matched.length));
+            const use = Math.max(0, Math.min(remaining, take));
+            remaining -= use;
+            if (use>0) addCount(person, month, g.s, use, "fuzzy", `阶段工作条目拆分（按条目占比分配，总次数=${total.count}）`, stageText, null);
+          }
+          if (remaining>0) {
+            // put remaining to the biggest group
+            entriesG.sort((a,b)=>b.k-a.k);
+            addCount(person, month, entriesG[0].s, remaining, "guess", "阶段工作总次数分配余数（建议核对）", stageText, null);
+          }
+
+          if (unmatched.length) {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: unmatched.map(x=>x.p).join("；"),
+              问题类型: "未匹配",
+              "建议匹配项/需要确认信息": "阶段工作部分条目无法匹配，已按可匹配条目计价；请人工补充或确认",
+              匹配方式: "无法匹配",
+              操作说明: "未匹配条目未计价，避免误计。"
+            });
+          }
+
+          // inconsistency check
+          const listed = parts.length;
+          if (total.source === "paren" && listed>0 && listed !== total.count) {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: stageText,
+              问题类型: "不一致",
+              "建议匹配项/需要确认信息": `阶段工作：总次数=${total.count}，列举=${listed}（按总次数计价）`,
+              匹配方式: "精确匹配",
+              操作说明: "有括号总次数，按总次数计价；列表仅作佐证。"
+            });
+          }
+        }
+      }
+    }
+
+    // 杂活块：同阶段工作逻辑
+    const miscText = cleanCellText(en.miscRaw || "");
+    if (miscText && !isEmptyOrNone(miscText)) {
+      excerpts.push("【杂活】" + miscText);
+      const total = extractCount(miscText);
+      const parts = splitItems(miscText);
+
+      if (total.count > 0) {
+        const matched = [];
+        const unmatched = [];
+        for (const p of parts) {
+          const pick = matcher.pickStandard(p);
+          if (!pick.standard || pick.standard==="__LECTURE__") { unmatched.push({p,pick}); continue; }
+          matched.push({p,pick});
+        }
+
+        if (matched.length === 0) {
+          const pick = matcher.pickStandard(miscText);
+          if (pick.standard && pick.standard !== "__LECTURE__") {
+            addCount(person, month, pick.standard, total.count, pick.mode, pick.explain, miscText, pick.candidates);
+          } else {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: miscText,
+              问题类型: "未匹配",
+              "建议匹配项/需要确认信息": "杂活内容无法匹配到量化表标准事项",
+              匹配方式: "无法匹配",
+              操作说明: "条目与整段均无法可靠匹配，暂不计价。"
+            });
+          }
+        } else {
+          const group = new Map();
+          for (const m of matched) group.set(m.pick.standard, (group.get(m.pick.standard)||0)+1);
+          const entriesG = Array.from(group.entries()).map(([s,k])=>({s,k}));
+          let remaining = total.count;
+
+          for (let i=0;i<entriesG.length;i++){
+            const g = entriesG[i];
+            const take = (i === entriesG.length-1) ? remaining : Math.floor(total.count * (g.k / matched.length));
+            const use = Math.max(0, Math.min(remaining, take));
+            remaining -= use;
+            if (use>0) addCount(person, month, g.s, use, "fuzzy", `杂活条目拆分（按条目占比分配，总次数=${total.count}）`, miscText, null);
+          }
+          if (remaining>0) {
+            entriesG.sort((a,b)=>b.k-a.k);
+            addCount(person, month, entriesG[0].s, remaining, "guess", "杂活总次数分配余数（建议核对）", miscText, null);
+          }
+
+          if (unmatched.length) {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: unmatched.map(x=>x.p).join("；"),
+              问题类型: "未匹配",
+              "建议匹配项/需要确认信息": "杂活部分条目无法匹配，已按可匹配条目计价；请人工补充或确认",
+              匹配方式: "无法匹配",
+              操作说明: "未匹配条目未计价，避免误计。"
+            });
+          }
+
+          const listed = parts.length;
+          if (total.source === "paren" && listed>0 && listed !== total.count) {
+            exceptions.push({
+              月份: month,
+              姓名: person,
+              原文: miscText,
+              问题类型: "不一致",
+              "建议匹配项/需要确认信息": `杂活：总次数=${total.count}，列举=${listed}（按总次数计价）`,
+              匹配方式: "精确匹配",
+              操作说明: "有括号总次数，按总次数计价；列表仅作佐证。"
+            });
+          }
+        }
+      }
+    }
+
+    // store excerpts
+    const key = `${month}||${person}`;
+    if (perPersonRaw.has(key)) {
+      perPersonRaw.get(key).excerpts = excerpts;
+      if (en.nameNote) perPersonRaw.get(key).notes.push(`姓名备注：${en.nameNote}`);
+      perPersonRaw.get(key).notes.push(`来源：${en.sourceFile}`);
+    }
+  }
+
+  // Build A/B/C
+  const A = [];
+  const B = [];
+  const C = [];
+  const allStd = Array.from(new Set(quantItems.map(x=>x.standard)));
+
+  const rawByPerson = new Map(); // person -> raw total (sum across months)
+  const perPersonMonth = Array.from(perPersonRaw.values()).sort((a,b)=> (a.month.localeCompare(b.month) || a.name.localeCompare(b.name)));
+
+  for (const rec of perPersonMonth) {
+    const itemNames = Array.from(rec.list);
+    const standardSummary = itemNames.join(" + ");
+    const partsMoney = itemNames.map(s => `${s}:${rec.items.get(s).amount}`).join("；");
+    const total = itemNames.reduce((sum,s)=>sum + rec.items.get(s).amount, 0);
+
+    A.push({
+      月份: rec.month,
+      姓名: rec.name,
+      "标准事项汇总": standardSummary,
+      "分项金额说明": partsMoney,
+      合计金额: total,
+      原文摘录: (rec.excerpts||[]).slice(0,2).join(" | ")
+    });
+
+    // B row
+    const rowB = { 月份: rec.month, 姓名: rec.name };
+    let sum = 0;
+    for (const s of allStd) {
+      const it = rec.items.get(s);
+      const c = it ? it.count : 0;
+      if (c) rowB[s] = c;
+      sum += it ? it.amount : 0;
+    }
+    rowB["合计金额"] = sum;
+    B.push(rowB);
+
+    // C row (per month aggregated now; later we also do per person total for 800)
+    const detail = itemNames.map(s => `${s}(${rec.items.get(s).count}次/${rec.items.get(s).amount})`).join("；");
+    C.push({
+      姓名: rec.name,
+      月份: rec.month,
+      "工作事项列表": itemNames.join(" + "),
+      "各标准事项(次数/小计)": detail,
+      "原始应得合计金额": total,
+      "本人到账金额(封顶后)": "",
+      "超出部分": "",
+      备注: rec.notes.join("；")
+    });
+
+    rawByPerson.set(rec.name, (rawByPerson.get(rec.name)||0) + total);
+  }
+
+  // 800 allocation is per person (across all months combined)
+  const personTotals = Array.from(rawByPerson.entries()).map(([name, rawAmount])=>({ name, rawAmount }));
+  const alloc = allocate800(personTotals, priorityNames);
+
+  // Build E
+  const E = alloc.allocation.map(x => ({
+    "姓名（账户）": x.name,
+    原始应得金额: x.raw,
+    "本人到账金额(≤800)": x.selfPay,
+    超出部分: x.overflow,
+    "代收来源明细": x.recvFrom.map(r => `${r.from}/${r.amount}`).join("；"),
+    "该账户最终到账金额(≤800)": x.final,
+    剩余容量: x.remainingCap,
+    备注: ""
+  }));
+
+  // Fill C with capped info (same person across months; show per month row but cap is person-level)
+  const capMap = new Map(alloc.allocation.map(x=>[x.name,x]));
+  for (const row of C) {
+    const a = capMap.get(row.姓名);
+    if (a) {
+      row["本人到账金额(封顶后)"] = a.selfPay;
+      row["超出部分"] = a.overflow;
+    }
+  }
+
+  // D = exceptions + allocation exceptions + capacity check
+  const D = [...exceptions];
+  for (const ex of alloc.exceptions) {
+    D.push({
+      月份: "",
+      姓名: ex.name,
+      原文: "",
+      问题类型: "分配异常",
+      "建议匹配项/需要确认信息": ex.msg,
+      匹配方式: "人工推断",
+      操作说明: "800封顶分配阶段产生的提示。"
+    });
+  }
+
+  // Consistency check
+  const totalRaw = personTotals.reduce((s,x)=>s+x.rawAmount,0);
+  const totalFinal = alloc.allocation.reduce((s,x)=>s+x.final,0);
+  const ok = Math.abs(totalRaw - totalFinal) < 1e-6;
+  $("summaryLine").innerHTML = `
+    <div class="small">
+      <span class="${ok?'ok':'err'}">${ok?'一致性校验通过':'一致性校验失败'}</span>
+      ：最终到账合计 <b>${totalFinal}</b> = 原始应得合计 <b>${totalRaw}</b>
+      ｜总代收人数：<b>${alloc.usedReceiverCount}</b>
+    </div>
+  `;
+
+  // Render
+  renderTable("tableA", A);
+  renderTable("tableB", B);
+  renderTable("tableC", C);
+  renderTable("tableD", D);
+  renderTable("tableE", E);
+  renderTable("tableF", alloc.transfers.map(x=>({
+    "转出人（代收人）": x.outPerson,
+    "转入人（实际应得者）": x.inPerson,
+    转账金额: x.amount,
+    原因: x.reason,
+    备注: x.note
+  })));
+
+  OUT = { A, B, C, D, E, F: alloc.transfers, quantItems };
+  $("exportBtn").disabled = false;
+  setStatus("完成 ✅ 你可以导出Excel，或继续上传更多绩效表重新运行。", "ok");
+}
+
+function exportExcel() {
+  if (!OUT) return;
+  const wb = XLSX.utils.book_new();
+
+  function addSheet(name, rows) {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  }
+  addSheet("A 明细表", OUT.A);
+  addSheet("B 量化表", OUT.B);
+  addSheet("C 个人汇总", OUT.C);
+  addSheet("D 异常待确认", OUT.D);
+  addSheet("E 金额分配", OUT.E);
+  addSheet("F 转账通知", OUT.F.map(x=>({
+    "转出人（代收人）": x.outPerson,
+    "转入人（实际应得者）": x.inPerson,
+    转账金额: x.amount,
+    原因: x.reason,
+    备注: x.note
+  })));
+
+  const fileName = `绩效结算结果_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+// enable run when files selected
+$("quantFile").addEventListener("change", () => {
+  $("runBtn").disabled = !($("quantFile").files?.[0] && $("perfFiles").files?.length);
+});
+$("perfFiles").addEventListener("change", () => {
+  $("runBtn").disabled = !($("quantFile").files?.[0] && $("perfFiles").files?.length);
+});
+
+$("runBtn").addEventListener("click", run);
+$("exportBtn").addEventListener("click", exportExcel);
+
+setStatus("请先上传：量化表xlsx + 绩效表(docx/xlsx)，然后点击“运行”。");
+</script>
+</body>
 </html>
